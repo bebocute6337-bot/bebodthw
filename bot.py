@@ -1,77 +1,75 @@
-import asyncio
-import os
 import discord
-from discord import app_commands
 from discord.ext import commands
-from dotenv import load_dotenv
 import yt_dlp
-
-load_dotenv()
-BOT_TOKEN = os.getenv("DISCORD_TOKEN")
+import os
+import asyncio
 
 intents = discord.Intents.default()
 intents.message_content = True
-intents.voice_states = True
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-YTDL_OPTIONS = {
-    "format": "bestaudio/best",
-    "noplaylist": True,
-    "quiet": True,
-    "cookiefile": "cookies.txt" if os.path.exists("cookies.txt") else None,
-}
+# ================== FIX COOKIES (QUAN TRỌNG) ==================
+def get_ydl_opts():
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'noplaylist': True,
+        'quiet': True,
+        'no_warnings': True,
+        'extractaudio': True,
+        'audioformat': 'mp3',
+        'outtmpl': '%(title)s.%(ext)s',
+    }
+    
+    # Lấy cookies từ Railway Variables
+    cookies = os.getenv('COOKIES') or os.getenv('YOUTUBE_COOKIES')
+    
+    if cookies:
+        with open('/tmp/cookies.txt', 'w') as f:
+            f.write(cookies)
+        ydl_opts['cookiefile'] = '/tmp/cookies.txt'
+    elif os.path.exists('cookies.txt'):
+        ydl_opts['cookiefile'] = 'cookies.txt'
+    
+    return ydl_opts
 
-FFMPEG_OPTIONS = {
-    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
-    "options": "-vn",
-}
+# ================== LỆNH PLAY ==================
+@bot.command()
+async def play(ctx, *, url):
+    if not ctx.author.voice:
+        return await ctx.send("Bạn phải vào voice channel trước!")
+
+    voice_channel = ctx.author.voice.channel
+    
+    if not ctx.voice_client:
+        await voice_channel.connect()
+    
+    try:
+        await ctx.send("Đang xử lý...")
+        
+        with yt_dlp.YoutubeDL(get_ydl_opts()) as ydl:
+            info = ydl.extract_info(url, download=False)
+            url2 = info['url']
+            title = info.get('title', 'Không có tên')
+        
+        source = discord.FFmpegPCMAudio(url2)
+        ctx.voice_client.play(source, after=lambda e: print(f"Đã phát xong: {e}"))
+        
+        await ctx.send(f"🎵 Đang phát: **{title}**")
+        
+    except Exception as e:
+        await ctx.send(f"❌ Lỗi: {str(e)}")
+
+# ================== LỆNH KHÁC ==================
+@bot.command()
+async def leave(ctx):
+    if ctx.voice_client:
+        await ctx.voice_client.disconnect()
+        await ctx.send("Đã rời voice channel.")
 
 @bot.event
 async def on_ready():
-    print(f"✅ Bot online: {bot.user}")
-    try:
-        synced = await bot.tree.sync()
-        print(f"✅ Synced {len(synced)} commands")
-    except Exception as e:
-        print(f"❌ Sync error: {e}")
+    print(f"Bot đã online: {bot.user}")
 
-@bot.tree.command(name="play", description="Phát nhạc")
-@app_commands.describe(query="Link YouTube hoặc tên bài")
-async def play(interaction: discord.Interaction, query: str):
-    await interaction.response.defer()
-    
-    if not interaction.user.voice:
-        return await interaction.followup.send("❌ Bạn cần vào kênh thoại trước!")
-    
-    vc = interaction.guild.voice_client
-    if not vc:
-        vc = await interaction.user.voice.channel.connect()
-    
-    try:
-        with yt_dlp.YoutubeDL(YTDL_OPTIONS) as ydl:
-            info = ydl.extract_info(query, download=False)
-            url = info['url'] if 'url' in info else info['entries'][0]['url']
-        
-        vc.play(discord.FFmpegPCMAudio(url, **FFMPEG_OPTIONS))
-        await interaction.followup.send(f"🎵 Đang phát: **{info.get('title', query)}**")
-    except Exception as e:
-        await interaction.followup.send(f"❌ Lỗi: {str(e)[:100]}")
-
-@bot.tree.command(name="skip", description="Bỏ qua bài")
-async def skip(interaction: discord.Interaction):
-    vc = interaction.guild.voice_client
-    if vc and vc.is_playing():
-        vc.stop()
-        await interaction.response.send_message("⏭️ Đã bỏ qua!")
-    else:
-        await interaction.response.send_message("❌ Không có bài nào đang phát")
-
-@bot.tree.command(name="stop", description="Dừng nhạc")
-async def stop(interaction: discord.Interaction):
-    vc = interaction.guild.voice_client
-    if vc:
-        vc.stop()
-        await vc.disconnect()
-    await interaction.response.send_message("⏹️ Đã dừng!")
-
-bot.run(BOT_TOKEN)
+# Chạy bot
+bot.run(os.getenv("DISCORD_TOKEN"))
